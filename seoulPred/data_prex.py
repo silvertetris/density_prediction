@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 
-def data_prex(path='./PopulationData'):
+def data_prex(path='../PopulationData'):
     # 1) 원본 JSON 불러오기
     abroadmove_json = pd.read_json(path + '/kosis_abroadMove.json')
     abroadmove_data = pd.DataFrame(abroadmove_json)
