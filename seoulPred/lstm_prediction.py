@@ -117,7 +117,7 @@ def plot_full_prediction(y_scaled, model, X_scaled, scaler_y, future_preds):
     plt.show()
 
 
-# === 실행 ===
+
 def run_lstm_pipeline(df):
     X_scaled, y_scaled, scaler_X, scaler_y, df, features = prepare_lstm_data(df)
     X_train, X_test, y_train, y_test = split_data(X_scaled, y_scaled)
@@ -132,6 +132,5 @@ def run_lstm_pipeline(df):
     plot_full_prediction(y_scaled, model, X_scaled, scaler_y, future_preds)
 
 
-# 사용 예시
 result = run_lstm_pipeline(data_prex.data_prex())
 print(result)
