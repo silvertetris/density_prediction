@@ -2,6 +2,9 @@ import pandas as pd
 import data_prex
 import matplotlib.pyplot as plt
 
+from countyPred.cohort_calculate import calculate_with_last_index
+from countyPred.xgBoost import forecast_all
+
 
 def data_err_calc(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -37,7 +40,6 @@ def data_err_calc(df: pd.DataFrame) -> pd.DataFrame:
     plt.grid(True)
     plt.tight_layout()
     plt.show()
-
     '''
     2021년 3월
     2022년 9월
@@ -46,5 +48,16 @@ def data_err_calc(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-a, b, c = data_prex.data_prex()
-data_err_calc(a)
+def compare_population(expected: pd.Series,
+                       forecast: pd.DataFrame) -> pd.DataFrame:
+    df = pd.DataFrame({
+        'expected_population': expected,
+        'predicted_population': forecast['population']
+    })
+    df['error'] = df['predicted_population'] - df['expected_population']
+    return df
+actual, b, c = data_prex.data_prex()
+data_err_calc(actual)
+forecast = forecast_all(actual, n_lags=6, n_forecast=12)
+expected = calculate_with_last_index(actual, forecast)
+print(compare_population(expected, forecast))
