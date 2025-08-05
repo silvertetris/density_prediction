@@ -9,17 +9,16 @@ def create_lag_features(series: pd.Series, n_lags: int) -> pd.DataFrame:
     df = pd.DataFrame({'y': series})
     for lag in range(1, n_lags + 1):
         df[f'lag_{lag}'] = df['y'].shift(lag)
-    df = df.dropna()
     return df
 
 def xgb_forecast(series: pd.Series, n_lags: int, n_forecast: int, **xgb_params) -> pd.Series:
 
     df = create_lag_features(series, n_lags)
-    X, y = df.drop(columns='y'), df['y']
+    x, y = df.drop(columns='y'), df['y']
     model = XGBRegressor(**xgb_params)
-    model.fit(X, y)
+    model.fit(x, y)
 
-    last_vals = series.values[-n_lags:].tolist()
+    last_vals = series.values[-n_lags:].tolist() #ad hoc, sliding window
     preds = []
     for _ in range(n_forecast):
         x_input = np.array(last_vals[-n_lags:]).reshape(1, -1)
@@ -34,7 +33,7 @@ def xgb_forecast(series: pd.Series, n_lags: int, n_forecast: int, **xgb_params) 
     return pd.Series(preds, index=future_idx)
 
 def forecast_all(df: pd.DataFrame,
-                 n_lags: int = 3,
+                 n_lags: int = 3, #그 전 데이터
                  n_forecast: int = 12,
                  xgb_params: dict = None) -> pd.DataFrame:
     if xgb_params is None:
@@ -46,7 +45,6 @@ def forecast_all(df: pd.DataFrame,
 
     forecasts = {}
     for col in df.columns:
-        print(f"[{col}] 모델 학습 및 예측 중...")
         forecasts[col] = xgb_forecast(df[col], n_lags, n_forecast, **xgb_params)
 
     # 결과 합치기
