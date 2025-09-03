@@ -15,7 +15,11 @@ def data_prex(path='../PopulationData', county='Songpa-gu'):
     born_data = born_data[born_data['C1_NM_ENG'] == county].reset_index(drop=True)
     death_data = death_data[death_data['C1_NM_ENG'] == county].reset_index(drop=True)
     immigrats_data = immigrats_data[immigrats_data['C1_NM_ENG'] == county].reset_index(drop=True)
-    population_data = population_data[population_data['C1_NM_ENG'] == county].reset_index(drop=True)
+    if county == 'Gangdong-gu': #강동구만 이상함
+        population_data = population_data[population_data['C1_NM_ENG'] == 'Gang-dong'].reset_index(drop=True)
+    else:
+        population_data = population_data[population_data['C1_NM_ENG'] == county].reset_index(drop=True)
+
     immigrats_data = immigrats_data[immigrats_data['ITM_NM_ENG'] == "Netmigration(Administrative reports)"].reset_index(
         drop=True)
     population_data = population_data[population_data['ITM_NM_ENG'] == 'Koreans (Total)'].reset_index(drop=True)
@@ -57,5 +61,3 @@ def data_prex(path='../PopulationData', county='Songpa-gu'):
 
     return result, min_start, max_end
 
-
-data_prex()
