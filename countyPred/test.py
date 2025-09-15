@@ -1,82 +1,74 @@
-import json
-from typing import Optional, Tuple
+import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
-import pandas as pd
-
-from countyPred.county_data_collector import county_data_collector
 
 
-def plot_seoul_by_sgg_code(
-    shape_path: str,
-    wide_df: pd.DataFrame,                       # 행=1, 열=영문 구이름
-    mapping_json_path: str,                      # {"Gangnam-gu":"11680", ...}
-    at_row: int | str = 0,                       # 사용할 행(정수 index 또는 라벨; 예: "data")
-    cmap: str = "OrRd",
-    title: Optional[str] = None,
-    figsize: Tuple[int, int] = (8, 8),
-):
-    #일단 1번째 행
-    if isinstance(at_row, int):
-        row = wide_df.iloc[at_row]
-        used_label = wide_df.index[at_row] if len(wide_df.index) > at_row else at_row
-    else:
-        row = wide_df.loc[at_row]
-        used_label = at_row
-    series = row.dropna()
-
-    with open(mapping_json_path, "r", encoding="utf-8") as f:
-        name_to_sgg: dict[str, str] = json.load(f)
-
-    tbl = pd.DataFrame({
-        "ENG": series.index.astype(str),
-        "value": series.values
-    })
-    tbl["SIG_CD"] = (
-        tbl["ENG"].map(name_to_sgg)
-                  .astype(str)
-                  .str.strip()
-                  .str.zfill(5)
+def load_txt(path: str, encoding: str = "utf-8") -> pd.DataFrame:
+    df = pd.read_csv(
+        path, sep=r"\^", engine="python", header=None,  # split
+        names=["year", "cell_id", "metric", "value"],
+        dtype={"year": int, "cell_id": str, "metric": str, "value": float},
+        encoding=encoding
     )
+    return df
 
-    gdf = gpd.read_file(shape_path)
-    gdf = gdf.set_crs(4326) if gdf.crs is None else gdf.to_crs(4326)
 
-    code_col = 'sgg'
-    gdf[code_col] = gdf[code_col].astype(str).str.strip().str.zfill(5)
+def overview(df: pd.DataFrame) -> None:
+    print("== head ==");
+    print(df.head())
+    print("\n== years ==");
+    print(df["year"].value_counts().sort_index())
+    print("\n== metrics ==");
+    print(df["metric"].value_counts())
+    print("\n== value describe ==");
+    print(df["value"].describe())
 
-    merged = gdf.merge(tbl[["SIG_CD", "value"]], left_on=code_col, right_on="SIG_CD", how="left")
 
-    merged = merged.to_crs(3857) #단순히 웹페이지에서 지도를 보여주기 위함이라고 한다면, ESPG:3857을 사용하는 것
-    #plot
-    fig, ax = plt.subplots(figsize=figsize)
-    merged.plot(
-        column="value", ax=ax, cmap=cmap,
-        edgecolor="white", linewidth=0.5, legend=True,
-        missing_kwds={"color": "lightgray", "hatch": "///", "label": "No data"},
-    )
-    if title is None:
-        title = f"Seoul population (row={used_label})"
-    ax.set_title(title, fontsize=13)
-    ax.axis("off")
-    ax.set_aspect("equal")
+def to_geopandas(df: pd.DataFrame, grid_path: str,
+                 grid_id_col: str, year: int, metric: str) -> gpd.GeoDataFrame:
+    # (1) 연도/지표 선택
+    dsel = df[(df["year"] == year) & (df["metric"] == metric)].copy()
+    dsel["cell_id"] = dsel["cell_id"].astype(str).str.strip()
 
-    # 자동 줌
-    minx, miny, maxx, maxy = merged.total_bounds
-    pad_x, pad_y = (maxx-minx)*0.05, (maxy-miny)*0.05
-    ax.set_xlim(minx - pad_x, maxx + pad_x)
-    ax.set_ylim(miny - pad_y, maxy + pad_y)
-    plt.tight_layout(); plt.show()
+    # (2) Shapefile 읽기 (구성파일 .shx/.dbf/.prj 모두 있는 상태)
+    ggrid = gpd.read_file(grid_path)  # engine 기본(pyogrio)로 충분
+    if ggrid.crs is None:
+        # prj가 있으면 보통 자동 설정됨. 없을 때만 임시로 WGS84
+        ggrid = ggrid.set_crs(4326)
 
+    # (3) 키 정규화 & 컬럼 체크
+    if grid_id_col not in ggrid.columns:
+        raise KeyError(f"'{grid_id_col}' 컬럼을 Shapefile에서 찾지 못했습니다. gdf.columns={list(ggrid.columns)}")
+    ggrid[grid_id_col] = ggrid[grid_id_col].astype(str).str.strip()
+
+    # (4) 코드 조인 (좌측: 모든 격자 유지)
+    merged = ggrid.merge(dsel[["cell_id", "value"]],
+                         left_on=grid_id_col, right_on="cell_id", how="left")
     return merged
 
-df = county_data_collector()
 
-plot_seoul_by_sgg_code(
-    shape_path="../PopulationData/seoul_map.geojson",
-    wide_df=df,
-    mapping_json_path="../PopulationData/seoul_sgg_code.json",
-    at_row="data",
-    cmap="OrRd",
-    title="seoul population prediction (XGBOOST)"
+# 4) 플롯
+def plot_choropleth(gdf: gpd.GeoDataFrame, value_col: str = "value",
+                    cmap: str = "OrRd", title: str | None = None):
+    gm = gdf.to_crs(3857)
+    ax = gm.plot
+    ax.set_axis_off()
+    ax.set_title(title or value_col)
+    minx, miny, maxx, maxy = gm.total_bounds
+    pad_x, pad_y = (maxx - minx) * 0.05, (maxy - miny) * 0.05
+    ax.set_xlim(minx - pad_x, maxx + pad_x)
+    ax.set_ylim(miny - pad_y, maxy + pad_y)
+    plt.tight_layout();
+    plt.show()
+
+
+df = load_txt("../PopulationData/sgis/2015년_인구_다사_1K.txt", encoding="utf-8")
+overview(df)
+gmerged = to_geopandas(
+    df,
+    grid_path="../PopulationData/sgis/grid_다사_1K.shp",
+    grid_id_col="GRID_1K_CD",
+    year=2015,
+    metric="to_in_001"
 )
+plot_choropleth(gmerged, value_col="value", title="2015 to_in_001 (grid)")
