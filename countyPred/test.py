@@ -12,15 +12,15 @@ def load_txt(path: str, encoding: str = "utf-8") -> pd.DataFrame:
     )
     return df
 
-
+#개요
 def overview(df: pd.DataFrame) -> None:
-    print("== head ==");
+    print("head")
     print(df.head())
-    print("\n== years ==");
+    print("years")
     print(df["year"].value_counts().sort_index())
-    print("\n== metrics ==");
+    print("metrics")
     print(df["metric"].value_counts())
-    print("\n== value describe ==");
+    print("value")
     print(df["value"].describe())
 
 
