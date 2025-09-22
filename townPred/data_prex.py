@@ -29,5 +29,4 @@ def town_wide_data(df: pd.DataFrame): #wide 시계열 용 데이터
     return wide
 
 #data = town_wide_data(data_prex())
-#print(data.shape, data)
-
+#print(data.shape, data.last_valid_index())
