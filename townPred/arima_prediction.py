@@ -1,9 +1,7 @@
 import warnings
-import numpy as np
+
 import pandas as pd
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-
-from townPred.data_prex import data_prex, town_wide_data
 
 
 def _prep_monthly_index(df: pd.DataFrame) -> pd.DataFrame:
