@@ -3,6 +3,8 @@ import warnings
 import pandas as pd
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
+from townPred.data_prex import data_prex, town_wide_data
+
 
 def _prep_monthly_index(df: pd.DataFrame) -> pd.DataFrame:
     """DatetimeIndex를 월간 빈도(MS)로 정렬/보정."""
@@ -85,9 +87,7 @@ def arima_forecast_all(
     fc_df = pd.DataFrame(forecasts, index=future_idx).sort_index()
     return fc_df
 
-
-# 네가 가진 전처리 함수
-"""df_long = data_prex(path="../PopulationData/townScale/")
+df_long = data_prex(path="../PopulationData/townScale/")
 wide = town_wide_data(df_long)  # 행=월, 열=동코드(10자리)
 
 future_arima = arima_forecast_all(
@@ -98,4 +98,4 @@ future_arima = arima_forecast_all(
     disp_progress=True
 )
 print(future_arima.shape)
-print(future_arima.head())"""
+print(future_arima.head())
