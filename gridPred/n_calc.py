@@ -26,11 +26,13 @@ def _infer_year_from_path(path: str, fallback: int | None = None) -> int:
         raise ValueError("year not found")
     return fallback
 
-def load_population_rho(txt_path: str,
-                        shp_path: str,
-                        grid_id_col: str = "GRID_1K_CD",
-                        metric: str = "to_in_001",
-                        year: int | None = None) -> gpd.GeoDataFrame:
+def load_population_rho(
+    txt_path: str,
+    shp_path: str,
+    grid_id_col: str = "GRID_100M_",
+    metric: str = "to_in_001",
+    year: int | None = None
+) -> gpd.GeoDataFrame:
     df = pd.read_csv(
         txt_path, sep=r"\^", engine="python", header=None,
         names=["year", "cell_id", "metric", "value"],
@@ -40,13 +42,16 @@ def load_population_rho(txt_path: str,
     y = year if year is not None else _infer_year_from_path(txt_path, df["year"].max())
     dsel = df[(df["year"] == y) & (df["metric"] == metric)].copy()
     dsel["cell_id"] = dsel["cell_id"].astype(str).str.strip()
+
     ggrid = gpd.read_file(shp_path)
     if ggrid.crs is None:
         ggrid = ggrid.set_crs(4326)
     if grid_id_col not in ggrid.columns:
         raise KeyError(f"{grid_id_col} not in {list(ggrid.columns)}")
     ggrid[grid_id_col] = ggrid[grid_id_col].astype(str).str.strip()
+
     g = ggrid.merge(dsel[["cell_id","value"]], left_on=grid_id_col, right_on="cell_id", how="left")
+
     gm = g.to_crs(3857)
     gm["area_m2"] = gm.geometry.area
     gm["rho"] = gm["value"].fillna(0.0) / gm["area_m2"]
@@ -126,11 +131,13 @@ def ensure_S(bcr_gdf: gpd.GeoDataFrame, value_col: str | None = None) -> gpd.Geo
     g["S"] = s.clip(0, 1)
     return g
 
-def compute_casualty(pop_1km: gpd.GeoDataFrame,
-                     bcr_100m: gpd.GeoDataFrame,
-                     A_exp: float = 79.36704,
-                     P_fall: float = 1.0,
-                     P_fatality: float = 1.0) -> tuple[float, gpd.GeoDataFrame]:
+def compute_casualty(
+    pop_1km: gpd.GeoDataFrame,
+    bcr_100m: gpd.GeoDataFrame,
+    A_exp: float = 79.36704,
+    P_fall: float = 1.0,
+    P_fatality: float = 1.0
+) -> tuple[float, gpd.GeoDataFrame]:
     pop = ensure_rho(pop_1km)
     bcr = ensure_S(bcr_100m)
     pop3857 = pop.to_crs(3857)[["rho","geometry"]]
@@ -142,7 +149,7 @@ def compute_casualty(pop_1km: gpd.GeoDataFrame,
     total = float(joined["N_k"].sum())
     return total, joined.to_crs(4326)
 
-
+import numpy as np
 import matplotlib.pyplot as plt
 import geopandas as gpd
 
@@ -153,44 +160,57 @@ except Exception:
     HAS_CTX = False
 
 def plot_casualty_map(
-        per_cell: gpd.GeoDataFrame,
-        value_col: str = "N_k",
-        title: str | None = None,
-        cmap: str = "magma",
-        alpha: float = 0.85,
-        figsize: tuple[int, int] = (10, 10),
-        use_basemap: bool = True,
-        add_labels: bool = True,
-        save_path: str | None = None,
+    per_cell: gpd.GeoDataFrame,
+    value_col: str = "N_k",
+    title: str | None = None,
+    cmap: str = "magma",
+    alpha: float = 0.85,
+    figsize: tuple[int, int] = (10, 10),
+    use_basemap: bool = False,
+    add_labels: bool = False,
+    save_path: str | None = None,
+    clip_quantile: float = 0.99,     # 상위 1%를 최대치로 클리핑
+    log_scale: bool = False,         # 로그 스케일 시각화
+    scale_factor: float = 1.0,       # 값을 임의 배수로 키워서 강조
 ):
     if value_col not in per_cell.columns:
         raise KeyError(f"'{value_col}' not found in columns: {list(per_cell.columns)}")
+
     g = per_cell.copy()
     if g.crs is None:
         g.set_crs(4326, inplace=True)
     gm = g.to_crs(3857)
+
+    vals = pd.to_numeric(gm[value_col], errors="coerce").fillna(0) * float(scale_factor)
+    if log_scale:
+        vals = np.log1p(vals)
+    gm["_plot_val"] = vals
+
+    vmax = float(vals.quantile(min(max(clip_quantile, 0.5), 0.999)))  # 50%~99.9% 사이만 허용
+    vmin = 0.0
+
     fig, ax = plt.subplots(figsize=figsize)
     minx, miny, maxx, maxy = gm.total_bounds
     pad_x, pad_y = (maxx - minx) * 0.05, (maxy - miny) * 0.05
     ax.set_xlim(minx - pad_x, maxx + pad_x)
     ax.set_ylim(miny - pad_y, maxy + pad_y)
+
     if use_basemap and HAS_CTX:
         try:
-            cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery, attribution=True)
+            cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, attribution=True)
             if add_labels:
-                try:
-                    cx.add_basemap(ax, source=cx.providers.Stamen.TonerLabels, attribution=False)
-                except Exception:
-                    cx.add_basemap(ax, source=cx.providers.CartoDB.VoyagerOnlyLabels, attribution=False)
+                cx.add_basemap(ax, source=cx.providers.CartoDB.VoyagerOnlyLabels, attribution=False)
         except Exception as e:
             print(f"[WARN] basemap: {e}")
+
     gm.plot(
-        column=value_col,
+        column="_plot_val",
         ax=ax,
         cmap=cmap,
         legend=True,
+        vmin=vmin, vmax=vmax,
         edgecolor="white",
-        linewidth=0.15,
+        linewidth=0.08,
         alpha=alpha,
         missing_kwds={"color": "#d9d9d9", "hatch": "///", "label": "No data", "alpha": 0.7},
     )
@@ -199,25 +219,28 @@ def plot_casualty_map(
     ax.set_title(title or value_col, fontsize=14)
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+        plt.savefig(save_path, dpi=220, bbox_inches="tight")
         print(f"[INFO] saved → {save_path}")
     plt.show()
 
 def compute_and_plot_from_sources(
-        pop_txt_path: str,
-        pop_shp_path: str,
-        bcr_outer_zip_path: str,
-        grid_id_col: str = "GRID_1K_CD",
-        metric: str = "to_in_001",
-        year: int | None = None,
-        A_exp: float = 79.36704,
-        P_fall: float = 1.0,
-        P_fatality: float = 1.0,
-        title: str | None = None,
-        cmap: str = "magma",
-        save_path: str | None = None,
-        use_basemap: bool = True,
-        add_labels: bool = True,
+    pop_txt_path: str,
+    pop_shp_path: str,
+    bcr_outer_zip_path: str,
+    grid_id_col: str = "GRID_100M_",
+    metric: str = "to_in_001",
+    year: int | None = None,
+    A_exp: float = 79.36704,
+    P_fall: float = 1.0,
+    P_fatality: float = 1.0,
+    title: str | None = None,
+    cmap: str = "magma",
+    save_path: str | None = None,
+    use_basemap: bool = False,
+    add_labels: bool = False,
+    clip_quantile: float = 0.99,   # 새 파라미터 그대로 전달
+    log_scale: bool = False,
+    scale_factor: float = 1.0,
 ):
     pop_gdf = load_population_rho(
         txt_path=pop_txt_path,
@@ -240,6 +263,7 @@ def compute_and_plot_from_sources(
         except Exception:
             y = None
         title = f"Casualty per 100m cell{f' ({y})' if y else ''}"
+
     plot_casualty_map(
         per_cell,
         value_col="N_k",
@@ -248,18 +272,25 @@ def compute_and_plot_from_sources(
         save_path=save_path,
         use_basemap=use_basemap,
         add_labels=add_labels,
+        clip_quantile=clip_quantile,
+        log_scale=log_scale,
+        scale_factor=scale_factor,
     )
     return total, per_cell
 
+# 실행 예시
 total, per_cell = compute_and_plot_from_sources(
-    pop_txt_path="../PopulationData/sgis/2023년_인구_다사_1K.txt",
-    pop_shp_path="../PopulationData/sgis/grid_다사_1K.shp",
+    pop_txt_path="../PopulationData/sgis/100res_grid_data/2023년_인구_다사_100M.txt",
+    pop_shp_path="../PopulationData/sgis/grid_다사_100M.shp",
     bcr_outer_zip_path="../PopulationData/서울시 건폐율 데이터 100m.zip",
     metric="to_in_001",
     year=2023,
     cmap="magma",
-    save_path=None,       # 예: "casualty_map.png" 로 저장하려면 경로 지정
+    save_path=None,
     use_basemap=False,
     add_labels=False,
+    clip_quantile=0.995,   # ← 더 세게 자르고 싶으면 0.99~0.999로 조절
+    log_scale=True,        # ← 로그 스케일로 미세한 차이 살리기
+    scale_factor=5.0,      # ← 값 전체를 n배 키워 강조(시각화용)
 )
 print("총 피해 기대값 합계:", total)
