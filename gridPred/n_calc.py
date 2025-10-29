@@ -11,7 +11,7 @@ def _guess_value_col(gdf: gpd.GeoDataFrame) -> str:
     for c in cols:
         if re.search(r"건폐율", str(c), flags=re.IGNORECASE):
             return c
-    keys = ["bcr","building_coverage","coverage","cover","ratio","rate","value","val","pop","인구"]
+    keys = ["bcr", "building_coverage", "coverage", "cover", "ratio", "rate", "value", "val", "pop", "인구"]
     for c in cols:
         if any(k in str(c).lower() for k in keys):
             return c
@@ -19,6 +19,7 @@ def _guess_value_col(gdf: gpd.GeoDataFrame) -> str:
     if not num:
         raise ValueError("numeric value column not found")
     return num[0]
+
 
 def _infer_year_from_path(path: str, fallback: int | None = None) -> int:
     m = re.search(r"(20\d{2})", path)
@@ -28,12 +29,13 @@ def _infer_year_from_path(path: str, fallback: int | None = None) -> int:
         raise ValueError("year not found")
     return fallback
 
+
 def load_population_rho(
-    txt_path: str,
-    shp_path: str,
-    grid_id_col: str = "GRID_100M_",
-    metric: str = "to_in_001",
-    year: int | None = None
+        txt_path: str,
+        shp_path: str,
+        grid_id_col: str = "GRID_100M_",
+        metric: str = "to_in_001",
+        year: int | None = None
 ) -> gpd.GeoDataFrame:
     df = pd.read_csv(
         txt_path, sep=r"\^", engine="python", header=None,
@@ -52,12 +54,13 @@ def load_population_rho(
         raise KeyError(f"{grid_id_col} not in {list(ggrid.columns)}")
     ggrid[grid_id_col] = ggrid[grid_id_col].astype(str).str.strip()
 
-    g = ggrid.merge(dsel[["cell_id","value"]], left_on=grid_id_col, right_on="cell_id", how="left")
+    g = ggrid.merge(dsel[["cell_id", "value"]], left_on=grid_id_col, right_on="cell_id", how="left")
 
     gm = g.to_crs(3857)
     gm["area_m2"] = gm.geometry.area
     gm["rho"] = gm["value"].fillna(0.0) / gm["area_m2"]
-    return gm.to_crs(4326)[["rho","value","area_m2","geometry"]]
+    return gm.to_crs(4326)[["rho", "value", "area_m2", "geometry"]]
+
 
 def _normalize_bcr_column(g: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     key = _guess_value_col(g)
@@ -66,7 +69,8 @@ def _normalize_bcr_column(g: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         s = s / 100.0
     g = g.copy()
     g["S"] = s.clip(0, 1)
-    return g[["S","geometry"]]
+    return g[["S", "geometry"]]
+
 
 def load_bcr_100m_from_nested_zip(outer_zip_path: str) -> gpd.GeoDataFrame:
     p = Path(outer_zip_path)
@@ -106,6 +110,7 @@ def load_bcr_100m_from_nested_zip(outer_zip_path: str) -> gpd.GeoDataFrame:
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 
+
 def ensure_rho(pop_gdf: gpd.GeoDataFrame, value_col: str | None = None) -> gpd.GeoDataFrame:
     g = pop_gdf.copy()
     if "rho" in g.columns:
@@ -115,11 +120,12 @@ def ensure_rho(pop_gdf: gpd.GeoDataFrame, value_col: str | None = None) -> gpd.G
     gm = g.to_crs(3857)
     gm["area_m2"] = gm.geometry.area
     gm["rho"] = pd.to_numeric(gm[value_col], errors="coerce").fillna(0) / gm["area_m2"]
-    out = gm.to_crs(4326)[["rho","geometry"]]
+    out = gm.to_crs(4326)[["rho", "geometry"]]
     for c in g.columns:
         if c not in out.columns:
             out[c] = g[c]
     return out
+
 
 def ensure_S(bcr_gdf: gpd.GeoDataFrame, value_col: str | None = None) -> gpd.GeoDataFrame:
     g = bcr_gdf.copy()
@@ -133,17 +139,18 @@ def ensure_S(bcr_gdf: gpd.GeoDataFrame, value_col: str | None = None) -> gpd.Geo
     g["S"] = s.clip(0, 1)
     return g
 
+
 def compute_casualty(
-    pop_1km: gpd.GeoDataFrame,
-    bcr_100m: gpd.GeoDataFrame,
-    A_exp: float = 79.36704,
-    P_fall: float = 1.0,
-    P_fatality: float = 1.0
+        pop_1km: gpd.GeoDataFrame,
+        bcr_100m: gpd.GeoDataFrame,
+        A_exp: float = 79.36704,
+        P_fall: float = 1.0,
+        P_fatality: float = 1.0
 ) -> tuple[float, gpd.GeoDataFrame]:
     pop = ensure_rho(pop_1km)
     bcr = ensure_S(bcr_100m)
-    pop3857 = pop.to_crs(3857)[["rho","geometry"]]
-    bcr3857 = bcr.to_crs(3857)[["S","geometry"]]
+    pop3857 = pop.to_crs(3857)[["rho", "geometry"]]
+    bcr3857 = bcr.to_crs(3857)[["S", "geometry"]]
     joined = gpd.sjoin(bcr3857, pop3857, how="left", predicate="within")
     joined["rho"] = joined["rho"].fillna(0.0)
     joined["S"] = joined["S"].fillna(0.0)
@@ -151,32 +158,35 @@ def compute_casualty(
     total = float(joined["N_k"].sum())
     return total, joined.to_crs(4326)
 
+
 import numpy as np
 import matplotlib.pyplot as plt
 import geopandas as gpd
 
 try:
     import contextily as cx
+
     HAS_CTX = True
 except Exception:
     HAS_CTX = False
 
+
 def plot_casualty_map(
-    per_cell: gpd.GeoDataFrame,
-    value_col: str = "N_k",
-    title: str | None = None,
-    cmap: str = "magma",
-    alpha: float = 0.9,
-    figsize: tuple[int, int] = (10, 10),
-    use_basemap: bool = False,
-    add_labels: bool = False,
-    save_path: str | None = None,
-    clip_quantile: float = 0.999,   # 상위 꼬리 강하게 자르기
-    low_cut_quantile: float = 0.01, # 하위도 너무 어둡지 않게 올리기
-    norm_mode: str = "power",       # "log" 또는 "power"
-    gamma: float = 0.35,            # power 정규화 감마(<1이면 저단부 강조)
-    scale_factor: float = 50.0,     # 값 전체 증폭(플롯용)
-    eps_for_zero: float = 1e-8,     # 0을 아주 작은 양수로 치환(플롯용)
+        per_cell: gpd.GeoDataFrame,
+        value_col: str = "N_k",
+        title: str | None = None,
+        cmap: str = "magma",
+        alpha: float = 0.9,
+        figsize: tuple[int, int] = (10, 10),
+        use_basemap: bool = False,
+        add_labels: bool = False,
+        save_path: str | None = None,
+        clip_quantile: float = 0.999,  # 상위 꼬리 강하게 자르기
+        low_cut_quantile: float = 0.01,  # 하위도 너무 어둡지 않게 올리기
+        norm_mode: str = "power",  # "log" 또는 "power"
+        gamma: float = 0.35,  # power 정규화 감마(<1이면 저단부 강조)
+        scale_factor: float = 50.0,  # 값 전체 증폭(플롯용)
+        eps_for_zero: float = 1e-8,  # 0을 아주 작은 양수로 치환(플롯용)
 ):
     if value_col not in per_cell.columns:
         raise KeyError(f"'{value_col}' not found in columns: {list(per_cell.columns)}")
@@ -202,7 +212,7 @@ def plot_casualty_map(
     if norm_mode == "log":
         # LogNorm은 vmin>0 필수
         vmin = max(vmin, eps_for_zero)
-        norm = LogNorm(vmin=vmin, vmax=max(vmax, vmin*10))
+        norm = LogNorm(vmin=vmin, vmax=max(vmax, vmin * 10))
     elif norm_mode == "power":
         # gamma<1이면 저단부가 더 밝아짐
         vmin = max(vmin, 0.0)
@@ -246,24 +256,24 @@ def plot_casualty_map(
         print(f"[INFO] saved → {save_path}")
     plt.show()
 
+
 def compute_and_plot_from_sources(
-    pop_txt_path: str,
-    pop_shp_path: str,
-    bcr_outer_zip_path: str,
-    grid_id_col: str = "GRID_100M_",
-    metric: str = "to_in_001",
-    year: int | None = None,
-    A_exp: float = 79.36704,
-    P_fall: float = 1.0,
-    P_fatality: float = 1.0,
-    title: str | None = None,
-    cmap: str = "magma",
-    save_path: str | None = None,
-    use_basemap: bool = False,
-    add_labels: bool = False,
-    clip_quantile: float = 0.99,   # 새 파라미터 그대로 전달
-    log_scale: bool = False,
-    scale_factor: float = 1.0,
+        pop_txt_path: str,
+        pop_shp_path: str,
+        bcr_outer_zip_path: str,
+        grid_id_col: str = "GRID_100M_",
+        metric: str = "to_in_001",
+        year: int | None = None,
+        A_exp: float = 79.36704,
+        P_fall: float = 1.0,
+        P_fatality: float = 1.0,
+        title: str | None = None,
+        cmap: str = "magma",
+        save_path: str | None = None,
+        use_basemap: bool = False,
+        add_labels: bool = False,
+        clip_quantile: float = 0.99,  # 새 파라미터 그대로 전달
+        scale_factor: float = 1.0,
 ):
     pop_gdf = load_population_rho(
         txt_path=pop_txt_path,
@@ -300,6 +310,7 @@ def compute_and_plot_from_sources(
     )
     return total, per_cell
 
+
 # 실행 예시
 total, per_cell = compute_and_plot_from_sources(
     pop_txt_path="../PopulationData/sgis/100res_grid_data/2023년_인구_다사_100M.txt",
@@ -311,8 +322,8 @@ total, per_cell = compute_and_plot_from_sources(
     save_path=None,
     use_basemap=False,
     add_labels=False,
-    clip_quantile=0.995,   # ← 더 세게 자르고 싶으면 0.99~0.999로 조절
-    log_scale=True,        # ← 로그 스케일로 미세한 차이 살리기
-    scale_factor=5.0,      # ← 값 전체를 n배 키워 강조(시각화용)
+    clip_quantile=0.995,  # ← 더 세게 자르고 싶으면 0.99~0.999로 조절
+    # ← 로그 스케일로 미세한 차이 살리기
+    scale_factor=5.0,  # ← 값 전체를 n배 키워 강조(시각화용)
 )
 print("총 피해 기대값 합계:", total)
