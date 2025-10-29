@@ -80,7 +80,7 @@ def make_time_folds(df: pd.DataFrame, n_splits: int) -> List[Tuple[pd.Timestamp,
 # 슬라이딩 윈도우 생성 (여러 지역을 합쳐 하나의 학습 세트로)
 def build_windows_for_range(
     df: pd.DataFrame,
-    train_end_date: pd.Timestamp | None,   # train 구간은 date <= train_end_date
+    train_end_date: pd.Timestamp | None,
     test_start_date: pd.Timestamp,
     test_end_date: pd.Timestamp,
     seq_len: int,
@@ -88,11 +88,7 @@ def build_windows_for_range(
     fit_scaler: bool,
     scalers: Dict[str, StandardScaler] | None = None
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, StandardScaler], List[Tuple[str, pd.Timestamp]]]:
-    """
-    반환: X_train, y_train, X_test, y_test, scalers, meta_te
-    - 각 location_code별로 스케일링(표준화)하되, train으로만 fit
-    - meta_te: 테스트 타깃 각각에 대응하는 (location_code, target_date) 리스트 (도식화용)
-    """
+
     X_train_list, y_train_list = [], []
     X_test_list,  y_test_list  = [], []
     meta_te: List[Tuple[str, pd.Timestamp]] = []
@@ -100,17 +96,27 @@ def build_windows_for_range(
     if scalers is None:
         scalers = {}
 
-    # 지역별 반복
     for loc, g in df.groupby("location_code"):
         g = g.sort_values("date").reset_index(drop=True)
-        # 스플릿
-        if train_end_date is None:
-            g_train = g[g["date"] < test_start_date]
-        else:
-            g_train = g[g["date"] <= train_end_date]
+
+        # split
+        g_train = g[g["date"] < test_start_date] if train_end_date is None else g[g["date"] <= train_end_date]
         g_test  = g[(g["date"] >= test_start_date) & (g["date"] <= test_end_date)]
 
-        # 윈도우 만들 수 있을 만큼 길이 확인
+        # 스케일러 생성
+        if loc not in scalers:
+            scalers[loc] = StandardScaler()
+
+        # ⚠️ 여기서 '윈도우 가능 여부'와 별개로, train 샘플만으로라도 scaler는 fit 해 둔다
+        if len(g_train) > 0:
+            train_vals_all = g_train["value"].to_numpy(dtype=float).reshape(-1,1)
+            if fit_scaler:
+                scalers[loc].fit(train_vals_all)
+        else:
+            # 이 지역은 train 데이터가 아예 없음 → 스케일러를 fit할 수 없으므로 이 fold에서 스킵
+            continue
+
+        # 윈도우 생성 보조
         def make_windows(arr_values: np.ndarray, arr_dates: np.ndarray, collect_meta: bool):
             Xs, ys, metas = [], [], []
             for t in range(len(arr_values) - seq_len - horizon + 1):
@@ -120,35 +126,26 @@ def build_windows_for_range(
                     metas.append((loc, pd.to_datetime(arr_dates[t+seq_len + horizon - 1])))
             return np.array(Xs), np.array(ys), metas
 
-        # 스케일링: 지역별로 scaler 유지
-        if loc not in scalers:
-            scalers[loc] = StandardScaler()
-
-        # ---- Train 윈도우 ----
+        # ---- Train 윈도우 (충분할 때만) ----
         if len(g_train) >= seq_len + horizon:
             train_vals = g_train["value"].to_numpy(dtype=float).reshape(-1,1)
-            if fit_scaler:
-                scalers[loc].fit(train_vals)
-            train_vals_sc = scalers[loc].transform(train_vals).squeeze(-1)
-
-            Xtr, ytr, _ = make_windows(train_vals_sc, g_train["date"].values, collect_meta=False)
+            train_sc = scalers[loc].transform(train_vals).squeeze(-1)
+            Xtr, ytr, _ = make_windows(train_sc, g_train["date"].values, collect_meta=False)
             if len(Xtr):
-                X_train_list.append(Xtr[..., np.newaxis])  # (N, seq_len, 1)
-                y_train_list.append(ytr.reshape(-1,1))     # (N, 1)
+                X_train_list.append(Xtr[..., np.newaxis])
+                y_train_list.append(ytr.reshape(-1,1))
 
-        # ---- Test 윈도우 ----
+        # ---- Test 윈도우 (충분할 때만) ----
         if len(g_test) >= seq_len + horizon:
-            # 테스트는 훈련에서 fit된 scaler로만 변환
             test_vals = g_test["value"].to_numpy(dtype=float).reshape(-1,1)
-            test_vals_sc = scalers[loc].transform(test_vals).squeeze(-1)
-
-            Xte, yte, metas = make_windows(test_vals_sc, g_test["date"].values, collect_meta=True)
+            # 여기서는 이미 위에서 train으로 scaler를 fit 했기 때문에 안전하게 transform 가능
+            test_sc = scalers[loc].transform(test_vals).squeeze(-1)
+            Xte, yte, metas = make_windows(test_sc, g_test["date"].values, collect_meta=True)
             if len(Xte):
                 X_test_list.append(Xte[..., np.newaxis])
                 y_test_list.append(yte.reshape(-1,1))
                 meta_te.extend(metas)
 
-    # 합치기
     def cat_or_empty(lst, shape):
         if lst:
             return np.concatenate(lst, axis=0)
@@ -160,6 +157,7 @@ def build_windows_for_range(
     y_test  = np.concatenate(y_test_list,  axis=0) if y_test_list  else np.zeros((0,1), dtype=float)
 
     return X_train, y_train, X_test, y_test, scalers, meta_te
+
 
 # =========================
 # 모델 빌더
