@@ -28,5 +28,5 @@ def town_wide_data(df: pd.DataFrame): #wide 시계열 용 데이터
     wide = wide.apply(pd.to_numeric, errors="coerce")
     return wide
 
-#data = town_wide_data(data_prex())
-#print(data.shape, data.last_valid_index())
+data = town_wide_data(data_prex())
+print(data.shape, data.last_valid_index())
