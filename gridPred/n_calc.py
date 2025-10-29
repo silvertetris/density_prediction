@@ -3,6 +3,8 @@ import re, zipfile, tempfile, shutil
 from pathlib import Path
 import pandas as pd
 import geopandas as gpd
+from matplotlib.colors import PowerNorm, LogNorm
+
 
 def _guess_value_col(gdf: gpd.GeoDataFrame) -> str:
     cols = [c for c in gdf.columns if c.lower() != "geometry"]
@@ -164,14 +166,17 @@ def plot_casualty_map(
     value_col: str = "N_k",
     title: str | None = None,
     cmap: str = "magma",
-    alpha: float = 0.85,
+    alpha: float = 0.9,
     figsize: tuple[int, int] = (10, 10),
     use_basemap: bool = False,
     add_labels: bool = False,
     save_path: str | None = None,
-    clip_quantile: float = 0.99,     # 상위 1%를 최대치로 클리핑
-    log_scale: bool = False,         # 로그 스케일 시각화
-    scale_factor: float = 1.0,       # 값을 임의 배수로 키워서 강조
+    clip_quantile: float = 0.999,   # 상위 꼬리 강하게 자르기
+    low_cut_quantile: float = 0.01, # 하위도 너무 어둡지 않게 올리기
+    norm_mode: str = "power",       # "log" 또는 "power"
+    gamma: float = 0.35,            # power 정규화 감마(<1이면 저단부 강조)
+    scale_factor: float = 50.0,     # 값 전체 증폭(플롯용)
+    eps_for_zero: float = 1e-8,     # 0을 아주 작은 양수로 치환(플롯용)
 ):
     if value_col not in per_cell.columns:
         raise KeyError(f"'{value_col}' not found in columns: {list(per_cell.columns)}")
@@ -181,13 +186,31 @@ def plot_casualty_map(
         g.set_crs(4326, inplace=True)
     gm = g.to_crs(3857)
 
-    vals = pd.to_numeric(gm[value_col], errors="coerce").fillna(0) * float(scale_factor)
-    if log_scale:
-        vals = np.log1p(vals)
-    gm["_plot_val"] = vals
+    vals = pd.to_numeric(gm[value_col], errors="coerce").fillna(0).astype(float)
+    vals = vals * float(scale_factor)
+    vals = np.where(vals <= 0, eps_for_zero, vals)  # 0도 색 나오게 아주 조금 올림
 
-    vmax = float(vals.quantile(min(max(clip_quantile, 0.5), 0.999)))  # 50%~99.9% 사이만 허용
-    vmin = 0.0
+    vmax = float(np.nanquantile(vals, min(max(clip_quantile, 0.5), 0.9999)))
+    # 하단도 너무 어둡지 않게: 0보다 큰 값의 하위 분위수로 vmin 올림
+    pos = vals[vals > 0]
+    if len(pos) == 0:
+        vmin = 0.0
+    else:
+        vmin = float(np.nanquantile(pos, max(min(low_cut_quantile, 0.2), 0.0)))
+
+    # 정규화 선택
+    if norm_mode == "log":
+        # LogNorm은 vmin>0 필수
+        vmin = max(vmin, eps_for_zero)
+        norm = LogNorm(vmin=vmin, vmax=max(vmax, vmin*10))
+    elif norm_mode == "power":
+        # gamma<1이면 저단부가 더 밝아짐
+        vmin = max(vmin, 0.0)
+        norm = PowerNorm(gamma=max(gamma, 1e-3), vmin=vmin, vmax=max(vmax, vmin + 1e-12))
+    else:
+        norm = None  # 기본 선형
+
+    gm["_plot_val"] = vals
 
     fig, ax = plt.subplots(figsize=figsize)
     minx, miny, maxx, maxy = gm.total_bounds
@@ -208,7 +231,7 @@ def plot_casualty_map(
         ax=ax,
         cmap=cmap,
         legend=True,
-        vmin=vmin, vmax=vmax,
+        norm=norm,
         edgecolor="white",
         linewidth=0.08,
         alpha=alpha,
@@ -219,7 +242,7 @@ def plot_casualty_map(
     ax.set_title(title or value_col, fontsize=14)
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=220, bbox_inches="tight")
+        plt.savefig(save_path, dpi=240, bbox_inches="tight")
         print(f"[INFO] saved → {save_path}")
     plt.show()
 
@@ -273,7 +296,6 @@ def compute_and_plot_from_sources(
         use_basemap=use_basemap,
         add_labels=add_labels,
         clip_quantile=clip_quantile,
-        log_scale=log_scale,
         scale_factor=scale_factor,
     )
     return total, per_cell
