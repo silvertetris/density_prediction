@@ -105,42 +105,35 @@ def inject_shock(df: pd.DataFrame,
     return out
 
 def build_windows_for_range(
-        df: pd.DataFrame,
-        train_end_date: pd.Timestamp | None,
-        test_start_date: pd.Timestamp,
-        test_end_date: pd.Timestamp,
-        seq_len: int,
-        horizon: int,
-        fit_scaler: bool,
-        scalers: Dict[str, StandardScaler] | None = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, StandardScaler], List[Tuple[str, pd.Timestamp]]]:
+        df, train_end_date, test_start_date, test_end_date,
+        seq_len, horizon, fit_scaler, scalers=None
+):
+    if scalers is None:
+        scalers = {}
 
     X_train_list, y_train_list = [], []
     X_test_list,  y_test_list  = [], []
-    meta_te: List[Tuple[str, pd.Timestamp]] = []
-
-    if scalers is None:
-        scalers = {}
+    meta_te = []
 
     for loc, g in df.groupby("location_code"):
         g = g.sort_values("date").reset_index(drop=True)
 
-        # split
         g_train = g[g["date"] < test_start_date] if train_end_date is None else g[g["date"] <= train_end_date]
         g_test  = g[(g["date"] >= test_start_date) & (g["date"] <= test_end_date)]
 
-
-        if loc not in scalers:
-            scalers[loc] = StandardScaler()
-        if len(g_train) > 0:
-            train_vals_all = g_train["value"].to_numpy(dtype=float).reshape(-1,1)
-            if fit_scaler:
-                scalers[loc].fit(train_vals_all)
-        else:
+        # ✅ train 샘플 없으면 이 지역은 완전히 스킵(스케일러도 만들지 않음)
+        if len(g_train) == 0:
             continue
 
-        # 윈도우 생성 보조
-        def make_windows(arr_values: np.ndarray, arr_dates: np.ndarray, collect_meta: bool):
+        # ✅ 이제 스케일러를 만든 뒤 fit
+        if loc not in scalers:
+            scalers[loc] = StandardScaler()
+        if fit_scaler:
+            train_vals_all = g_train["value"].to_numpy(dtype=float).reshape(-1, 1)
+            scalers[loc].fit(train_vals_all)
+
+        # ----- 윈도우 만들기 보조 -----
+        def make_windows(arr_values, arr_dates, collect_meta: bool):
             Xs, ys, metas = [], [], []
             for t in range(len(arr_values) - seq_len - horizon + 1):
                 Xs.append(arr_values[t:t+seq_len])
@@ -149,23 +142,23 @@ def build_windows_for_range(
                     metas.append((loc, pd.to_datetime(arr_dates[t+seq_len + horizon - 1])))
             return np.array(Xs), np.array(ys), metas
 
-        # ---- Train 윈도우 (충분할 때만) ----
+        # ---- Train ----
         if len(g_train) >= seq_len + horizon:
-            train_vals = g_train["value"].to_numpy(dtype=float).reshape(-1,1)
+            train_vals = g_train["value"].to_numpy(dtype=float).reshape(-1, 1)
             train_sc = scalers[loc].transform(train_vals).squeeze(-1)
             Xtr, ytr, _ = make_windows(train_sc, g_train["date"].values, collect_meta=False)
             if len(Xtr):
-                X_train_list.append(Xtr[..., np.newaxis])  # (N, seq_len, 1)
-                y_train_list.append(ytr.reshape(-1,1))     # (N, 1)
+                X_train_list.append(Xtr[..., np.newaxis])
+                y_train_list.append(ytr.reshape(-1, 1))
 
-        # ---- Test 윈도우 (충분할 때만) ----
+        # ---- Test ----
         if len(g_test) >= seq_len + horizon:
-            test_vals = g_test["value"].to_numpy(dtype=float).reshape(-1,1)
+            test_vals = g_test["value"].to_numpy(dtype=float).reshape(-1, 1)
             test_sc = scalers[loc].transform(test_vals).squeeze(-1)
             Xte, yte, metas = make_windows(test_sc, g_test["date"].values, collect_meta=True)
             if len(Xte):
                 X_test_list.append(Xte[..., np.newaxis])
-                y_test_list.append(yte.reshape(-1,1))
+                y_test_list.append(yte.reshape(-1, 1))
                 meta_te.extend(metas)
 
     def cat_or_empty(lst, shape):
@@ -174,11 +167,12 @@ def build_windows_for_range(
         return np.zeros(shape, dtype=float)
 
     X_train = cat_or_empty(X_train_list, (0, seq_len, 1))
-    y_train = np.concatenate(y_train_list, axis=0) if y_train_list else np.zeros((0,1), dtype=float)
+    y_train = np.concatenate(y_train_list, axis=0) if y_train_list else np.zeros((0, 1), dtype=float)
     X_test  = cat_or_empty(X_test_list,  (0, seq_len, 1))
-    y_test  = np.concatenate(y_test_list,  axis=0) if y_test_list  else np.zeros((0,1), dtype=float)
+    y_test  = np.concatenate(y_test_list,  axis=0) if y_test_list  else np.zeros((0, 1), dtype=float)
 
     return X_train, y_train, X_test, y_test, scalers, meta_te
+
 
 
 def build_lstm(input_shape, units=64, dropout=0.1, bidirectional=False):
