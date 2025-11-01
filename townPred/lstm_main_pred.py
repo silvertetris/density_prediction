@@ -69,21 +69,15 @@ def _make_future_dates(start_date: pd.Timestamp, months: int) -> List[pd.Timesta
     return dates
 
 def _predict_future_scaled(
-        df: pd.DataFrame,
-        scalers: Dict[str, StandardScaler],
-        model_uni: keras.Model,
-        model_bi: keras.Model,
-        months: int,
-        seq_len: int,
-        loc_focus: str | None = None,
+    df: pd.DataFrame,
+    scalers: Dict[str, StandardScaler],
+    model_uni: keras.Model,
+    model_bi: keras.Model,
+    months: int,
+    seq_len: int,
+    loc_focus: str | None = None,
 ) -> pd.DataFrame:
-    """
-    표준화(스케일) 공간에서 recursive 예측하여 창을 업데이트하되,
-    반환할 때는 **원단위**로 저장.
-    반환 컬럼: ["date","y_true_sc","y_pred_uni_sc","y_pred_bi_sc"]
-      - y_true_sc 는 미래라 NaN
-      - 이름은 *_sc 그대로 두지만 값은 '원단위' (plot_trends와 호환)
-    """
+
     if months <= 0:
         return pd.DataFrame(columns=["date","y_true_sc","y_pred_uni_sc","y_pred_bi_sc"])
 
@@ -91,9 +85,13 @@ def _predict_future_scaled(
     rows: List[Tuple[pd.Timestamp, float, float, float]] = []
 
     for loc, g in df.groupby("location_code"):
+        # loc_focus 필터
         if (loc_focus is not None) and (str(loc) != str(loc_focus)):
             continue
-        if loc not in scalers:
+
+        sc = scalers.get(loc)
+        # ✅ 스케일러 존재/fit 여부 확인 (fit된 경우에만 진행)
+        if sc is None or not hasattr(sc, "scale_"):
             continue
 
         g = g.sort_values("date").reset_index(drop=True)
@@ -101,18 +99,17 @@ def _predict_future_scaled(
         if len(vals) < seq_len:
             continue
 
-        sc = scalers[loc]
         sc_vals = sc.transform(vals).squeeze(-1).tolist()
-        window = sc_vals[-seq_len:]  # 스케일 단위 윈도우
+        window = sc_vals[-seq_len:]
 
         fut_dates = _make_future_dates(global_last_date, months)
         for d in fut_dates:
-            x = np.array(window, dtype=float)[np.newaxis, :, np.newaxis]  # (1, seq_len, 1)
+            x = np.array(window, dtype=float)[np.newaxis, :, np.newaxis]
 
             pu_sc = float(model_uni.predict(x, batch_size=1, verbose=0).squeeze(-1))
             pb_sc = float(model_bi.predict(x, batch_size=1, verbose=0).squeeze(-1))
 
-            # 저장은 원단위로
+            # 저장은 원단위로 (safe_inverse 사용)
             pu = safe_inverse(sc, np.array([pu_sc]))[0]
             pb = safe_inverse(sc, np.array([pb_sc]))[0]
             rows.append((pd.to_datetime(d), np.nan, pu, pb))
@@ -126,9 +123,9 @@ def _predict_future_scaled(
     df_future = (pd.DataFrame(rows, columns=["date","y_true_sc","y_pred_uni_sc","y_pred_bi_sc"])
                  .groupby("date", as_index=False)
                  .agg({"y_true_sc":"mean","y_pred_uni_sc":"mean","y_pred_bi_sc":"mean"})
-                 .sort_values("date")
-                 .reset_index(drop=True))
+                 .sort_values("date").reset_index(drop=True))
     return df_future
+
 
 
 # =========================
